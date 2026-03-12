@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body{
+margin:0;
+overflow:hidden;
+background:black;
+font-family:sans-serif;
+touch-action:none;
+user-select:none;
+}
+canvas{ display:block; }
+
+.controls{
+position:fixed;
+bottom:10px;
+width:100%;
+display:flex;
+justify-content:space-between;
+padding:0 20px;
+box-sizing:border-box;
+}
+
+button{
+width:70px;
+height:70px;
+font-size:25px;
+margin:5px;
+border:none;
+border-radius:10px;
+background:rgba(255,255,255,0.2);
+color:white;
+touch-action:none;
+}
+button:active{ background:rgba(255,255,255,0.5); }
+
+.health-bar{
+position:fixed;
+top:20px;
+width:40%;
+height:25px;
+background:#2a0000;
+border-radius:5px;
+border:1px solid #660000;
+}
+.health-bar-inner{
+height:100%;
+background:linear-gradient(90deg,#cc0000,#ff4444);
+border-radius:5px;
+transition:width 0.1s;
+}
+#playerHealth{left:5%;}
+#enemyHealth{right:5%;}
+
+.hblabel{
+position:fixed;
+top:50px;
+font-size:11px;
+color:#ff4444;
+letter-spacing:1px;
+}
+#lbPlayer{left:5%;}
+#lbEnemy{right:5%;text-align:right;}
+
+.choiceBox{
+position:fixed;
+bottom:120px;
+width:100%;
+display:none;
+justify-content:center;
+gap:20px;
+}
+.choiceBox button{
+width:160px;
+height:60px;
+font-size:18px;
+background:#1a0000;
+border:2px solid #cc0000;
+color:#ff6666;
+}
+
+/* Botón saltar */
+#jumpBtn{
+position:fixed;
+bottom:10px;
+left:50%;
+transform:translateX(-50%);
+width:70px;
+height:70px;
+font-size:25px;
+border:none;
+border-radius:10px;
+background:rgba(255,255,255,0.2);
+color:white;
+touch-action:none;
+}
+</style>
+</head>
+
+<body>
+<canvas id="game"></canvas>
+
+<div class="health-bar" id="playerHealth">
+  <div class="health-bar-inner" id="playerHealthInner"></div>
+</div>
+<div class="health-bar" id="enemyHealth">
+  <div class="health-bar-inner" id="enemyHealthInner"></div>
+</div>
+<div class="hblabel" id="lbPlayer">TÚ</div>
+<div class="hblabel" id="lbEnemy">ENEMIGO</div>
+
+<div class="choiceBox" id="choiceBox">
+  <button id="forgiveBtn"> Perdonarlo</button>
+  <button id="attackBtn"> Atacarlo</button>
+</div>
+
+<div class="controls">
+  <div>
+    <button id="leftBtn"></button>
+    <button id="rightBtn"></button>
+  </div>
+  <div>
+    <button id="hitBtn"></button>
+  </div>
+</div>
+<button id="jumpBtn"></button>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+canvas.width=window.innerWidth;
+canvas.height=window.innerHeight;
+
+const GROUND=canvas.height*0.72; // nivel del suelo
+const mapWidth=canvas.width*2;
+let cameraX=0;
+const scale=0.6;
+const speed=5;
+const GRAVITY=0.6;
+const JUMP_FORCE=-14;
+
+let playerHealth=200;
+let enemyHealth=200;
+let finishing=false;
+let finishStep=0;
+let hitApplied=false;
+let enemyAttackApplied=false;
+let enemyAttackCooldown=0;
+let showCredits=false;
+let creditY=canvas.height;
+let historiaIndex=0;
+let historiaTimer=0;
+
+const choiceBox=document.getElementById("choiceBox");
+const forgiveBtn=document.getElementById("forgiveBtn");
+const attackBtn=document.getElementById("attackBtn");
+
+const soundBeg=new Audio("sonidos del juego/ll.mp3");
+soundBeg.loop=true;
+const soundStory=new Audio("sonidos del juego/historia.mp3");
+
+// Sonido de golpe generado con Web Audio (no necesita archivo)
+const audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+function playHitSound(){
+  try{
+    const buf=audioCtx.createBuffer(1,audioCtx.sampleRate*0.12,audioCtx.sampleRate);
+    const data=buf.getChannelData(0);
+    for(let i=0;i<data.length;i++){
+      // ruido de impacto: noise con decay rápido
+      data[i]=(Math.random()*2-1)*Math.pow(1-i/data.length,2)*0.9;
+    }
+    const src=audioCtx.createBufferSource();
+    src.buffer=buf;
+    // filtro para hacerlo más "punch" (grave)
+    const filter=audioCtx.createBiquadFilter();
+    filter.type="lowpass";
+    filter.frequency.value=600;
+    src.connect(filter);
+    filter.connect(audioCtx.destination);
+    src.start();
+  }catch(e){}
+}
+
+const frasesPerdon=[
+  "Por favor... perdóname...",
+  "No quería que esto terminara así...",
+  "Te lo suplico... ten piedad...",
+  "Lo siento de verdad..."
+];
+
+//  HISTORIAS LARGAS 
+const historiaBuena=[
+  "El guerrero miró al enemigo caído.",
+  "Sus ojos se encontraron en silencio.",
+  "Recordó los días antes de la guerra...",
+  "Cuando ambos eran jóvenes e inocentes.",
+  "¿Cuándo se perdió todo eso?",
+  "Extendió la mano lentamente.",
+  "El enemigo dudó... luego la tomó.",
+  "Las armas cayeron al suelo.",
+  "El viento frío se volvió cálido.",
+  "No hubo palabras. No hacían falta.",
+  "Caminaron juntos hacia el horizonte rojo.",
+  "La luna sangrienta los vio alejarse.",
+  "Y por primera vez en años...",
+  "...hubo paz.",
+  "FIN — El camino del perdón."
+];
+
+const historiaMala=[
+  "Su nombre era Kael.",
+  "Nadie recuerda cuándo empezó todo.",
+  "Solo que un día apareció... y todo cambió.",
+  "Fue el primero en tender la mano.",
+  "También el primero en traicionar.",
+  "Construyó su fuerza sobre la confianza ajena.",
+  "Y cuando llegó el momento...",
+  "...eligió el poder antes que la lealtad.",
+  "La batalla de hoy no fue por tierra.",
+  "Fue por todo lo que él robó en silencio.",
+  "El guerrero lo venció.",
+  "Pero en el fondo sabía algo:",
+  "Ganar así... no sana nada.",
+  "Kael cayó sin decir una palabra.",
+  "Y el silencio después fue el más pesado de todos.",
+  "FIN."
+];
+
+let historiaActual=[];
+
+//  BURBUJAS 
+let bubbleText="";
+let bubbleChar=0;
+let bubbleFull="";
+let bubbleX=0;
+let bubbleY=0;
+let bubbleTimer=0;
+
+//  JUGADOR 
+let player={
+  x:200,
+  y:GROUND,
+  vy:0,        // velocidad vertical
+  onGround:true,
+  left:false,
+  right:false,
+  jumping:false,
+  state:"idle",
+  walkFrame:0,
+  hitFrame:0,
+  frameCount:0
+};
+
+//  ENEMIGO 
+// AI states: "chase" | "attack" | "retreat" | "strafe" | "stun" | "dead"
+let enemy={
+  x:900,
+  y:GROUND,
+  vy:0,
+  onGround:true,
+  state:"chase",   // estado de animación (walk/hit/dead)
+  aiState:"chase", // estado de IA
+  walkFrame:0,
+  hitFrame:0,
+  frameCount:0,
+  speed:2,
+  dead:false,
+  deathHits:0,
+  stunTimer:0,       // tiempo de stun al recibir golpe
+  retreatTimer:0,    // tiempo que retrocede
+  strafeDir:1,       // dirección de strafe
+  strafeTimer:0,
+  aggroLevel:0,      // sube con los golpes recibidos, hace al enemigo más agresivo
+  jumpCooldown:0,
+  hitFlash:0,        // frames de flash rojo — solo dura un instante
+};
+
+//  IMÁGENES 
+const walkImages=[];
+["6Y","7U","8I","9O","0P","10A"].forEach(n=>{
+  const img=new Image(); img.src=`caminata/${n}.png`; walkImages.push(img);
+});
+const hitImages=[];
+["1Q","2W","3E","4R","5T"].forEach(n=>{
+  const img=new Image(); img.src=`Sprite/${n}.png`; hitImages.push(img);
+});
+const deathImages=[];
+["1","2","3","4"].forEach(n=>{
+  const img=new Image(); img.src=`muerte/${n}.png`; deathImages.push(img);
+});
+
+//  CONTROLES 
+const leftBtn=document.getElementById("leftBtn");
+const rightBtn=document.getElementById("rightBtn");
+const hitBtn=document.getElementById("hitBtn");
+const jumpBtn=document.getElementById("jumpBtn");
+
+function holdButton(btn,on,off){
+  btn.addEventListener("pointerdown",e=>{e.preventDefault();on();});
+  btn.addEventListener("pointerup",e=>{e.preventDefault();off();});
+  btn.addEventListener("pointerleave",e=>{off();});
+}
+holdButton(leftBtn,()=>player.left=true,()=>player.left=false);
+holdButton(rightBtn,()=>player.right=true,()=>player.right=false);
+
+hitBtn.addEventListener("pointerdown",e=>{
+  e.preventDefault();
+  if(player.state!=="hit"){
+    player.state="hit";
+    player.hitFrame=0;
+    player.frameCount=0;
+    hitApplied=false;
+  }
+});
+
+jumpBtn.addEventListener("pointerdown",e=>{
+  e.preventDefault();
+  if(player.onGround){
+    player.vy=JUMP_FORCE;
+    player.onGround=false;
+  }
+});
+
+// teclado
+document.addEventListener("keydown",e=>{
+  if(e.key==="ArrowLeft"||e.key==="a") player.left=true;
+  if(e.key==="ArrowRight"||e.key==="d") player.right=true;
+  if((e.key===" "||e.key==="ArrowUp"||e.key==="w")&&player.onGround){
+    player.vy=JUMP_FORCE; player.onGround=false;
+  }
+  if(e.key==="z"||e.key==="x"){
+    if(player.state!=="hit"){
+      player.state="hit"; player.hitFrame=0; player.frameCount=0; hitApplied=false;
+    }
+  }
+});
+document.addEventListener("keyup",e=>{
+  if(e.key==="ArrowLeft"||e.key==="a") player.left=false;
+  if(e.key==="ArrowRight"||e.key==="d") player.right=false;
+});
+
+//  IMAGEN DEL TRAIDOR 
+const imgTraidor=new Image();
+imgTraidor.src="https://i.postimg.cc/BQFDgNt4/1773321812141.png";
+
+// Imagen de fondo para el final de perdón (jugador traicionado)
+const imgFinalPerdon=new Image();
+imgFinalPerdon.src="https://i.postimg.cc/YqBzLjxH/file-00000000a50471f5bb1825176733e70e.png";
+
+// Figurita para el final de ataque (abajo de la pantalla)
+const imgFinalAtaque=new Image();
+imgFinalAtaque.src="https://i.postimg.cc/s20DbQ2f/file-00000000ec38720e977ab4f0dd5eef2b.png";
+
+//  IMAGEN DEL JUGADOR (para la escena) 
+// Usa el primer frame de caminata como "retrato" del jugador
+// (se referencia walkImages[0] que ya está cargado)
+
+//  ESTADO ESCENA DE PERDÓN 
+let forgiveMode=false;
+let forgiveFade=0;          // 01 fade a negro
+let forgiveReady=false;     // ya terminó el fade, mostrar escena
+let forgiveDialogStep=0;
+let forgiveBubbleText="";
+let forgiveBubbleChar=0;
+let forgiveBubbleFull="";
+let forgiveBubbleWriting=false; // true = escribiendo, false = esperando tap
+let forgiveSpeaker=0;       // 1=traidor, 2=jugador
+let forgiveDialogDone=false;
+let forgiveEndTimer=0;
+let forgiveTapReady=false;  // el jugador puede tocar para avanzar
+
+// Diálogos: [quién habla (1=traidor, 2=jugador), texto]
+const dialogoTraicion=[
+  [1,"¿Por qué... me perdonás?"],
+  [2,"Porque odiar cansa más que pelear."],
+  [1,"Qué error tan grande..."],
+  [2,"¿Qué dijiste?"],
+  [1,"Debí terminar esto cuando pude."],
+  [2,"Yo te perdoné de verdad."],
+  [1,"Lo sé. Por eso gané yo."],
+  [1,"Usé tu compasión. Fue tan fácil."],
+  [2,"No..."],
+  [1,"Siempre supe que ibas a dudar."],
+  [2,"Eso no puede ser..."],
+  [1,"¿La verdad? Nunca mereciste ganar."],
+  [2,"..."],
+  [1,"Adiós."],
+];
+
+forgiveBtn.onclick=()=>{
+  choiceBox.style.display="none";
+  soundBeg.pause();
+  try{ soundStory.play(); }catch(e){}
+  forgiveMode=true;
+  forgiveFade=0;
+  forgiveReady=false;
+  forgiveDialogStep=0;
+  forgiveBubbleFull="";
+  forgiveBubbleText="";
+  forgiveBubbleChar=0;
+  forgiveBubbleWriting=false;
+  forgiveSpeaker=0;
+  forgiveDialogDone=false;
+  forgiveEndTimer=0;
+  forgiveTapReady=false;
+};
+
+attackBtn.onclick=()=>{
+  historiaActual=historiaMala;
+  choiceBox.style.display="none";
+  soundBeg.pause();
+  try{ soundStory.play(); }catch(e){}
+  showCredits=true; creditY=canvas.height+40;
+};
+
+// Tap/click para avanzar diálogo
+canvas.addEventListener("pointerdown",e=>{
+  if(!forgiveMode||!forgiveReady||forgiveDialogDone) return;
+  e.preventDefault();
+  if(forgiveBubbleWriting){
+    // Si está escribiendo  mostrar todo el texto de golpe
+    forgiveBubbleChar=forgiveBubbleFull.length;
+    forgiveBubbleText=forgiveBubbleFull;
+    forgiveBubbleWriting=false;
+    forgiveTapReady=true;
+  }else if(forgiveTapReady){
+    // Avanzar al siguiente diálogo
+    advanceForgiveDialog();
+  }
+});
+
+function advanceForgiveDialog(){
+  forgiveTapReady=false;
+  if(forgiveDialogStep<dialogoTraicion.length){
+    const [quien,texto]=dialogoTraicion[forgiveDialogStep];
+    forgiveSpeaker=quien;
+    forgiveBubbleFull=texto;
+    forgiveBubbleText="";
+    forgiveBubbleChar=0;
+    forgiveBubbleWriting=true;
+    forgiveTapReady=false;
+    forgiveDialogStep++;
+  }else{
+    forgiveDialogDone=true;
+  }
+}
+
+//  DRAW ESCENA PERDÓN (pantalla negra) 
+function drawForgiveScene(){
+  // Fase 1: fade a negro
+  if(!forgiveReady){
+    forgiveFade=Math.min(1,forgiveFade+0.04);
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    drawBackground();
+    drawCharacter(player,false);
+    if(imgTraidor.complete&&imgTraidor.naturalWidth){
+      const dh=imgTraidor.height*scale;
+      const dw=imgTraidor.width*scale;
+      const sx=enemy.x-cameraX;
+      ctx.save();
+      ctx.translate(sx+dw/2,0); ctx.scale(-1,1);
+      ctx.drawImage(imgTraidor,-dw/2,enemy.y-dh,dw,dh);
+      ctx.restore();
+    }
+    ctx.fillStyle=`rgba(0,0,0,${forgiveFade})`;
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    if(forgiveFade>=1){
+      forgiveReady=true;
+      advanceForgiveDialog();
+    }
+    return;
+  }
+
+  //  Fondo negro con vignette roja 
+  ctx.fillStyle="#050000";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // vignette sutil en las esquinas
+  const vig=ctx.createRadialGradient(
+    canvas.width/2,canvas.height/2,canvas.height*0.3,
+    canvas.width/2,canvas.height/2,canvas.height*0.85
+  );
+  vig.addColorStop(0,"rgba(0,0,0,0)");
+  vig.addColorStop(1,"rgba(80,0,0,0.5)");
+  ctx.fillStyle=vig;
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  //  Personajes 
+  const charH=canvas.height*0.42;
+  const groundY=canvas.height*0.74;
+
+  // Jugador izquierda — highlight si está hablando
+  const imgJ=walkImages[0];
+  if(imgJ&&imgJ.complete&&imgJ.naturalWidth){
+    const dw=charH*(imgJ.width/imgJ.height);
+    ctx.save();
+    if(forgiveSpeaker!==2) ctx.globalAlpha=0.45; // oscurecer si no habla
+    ctx.drawImage(imgJ,canvas.width*0.06,groundY-charH,dw,charH);
+    ctx.restore();
+  }
+
+  // Traidor derecha — espejado
+  if(imgTraidor.complete&&imgTraidor.naturalWidth){
+    const dw=charH*(imgTraidor.width/imgTraidor.height);
+    ctx.save();
+    if(forgiveSpeaker!==1) ctx.globalAlpha=0.45;
+    ctx.translate(canvas.width*0.94-dw/2,0);
+    ctx.scale(-1,1);
+    ctx.drawImage(imgTraidor,-dw/2,groundY-charH,dw,charH);
+    ctx.restore();
+  }
+
+  // Escritura letra a letra
+  if(forgiveBubbleWriting && forgiveBubbleChar<forgiveBubbleFull.length){
+    forgiveBubbleChar++;
+    forgiveBubbleText=forgiveBubbleFull.substring(0,forgiveBubbleChar);
+    if(forgiveBubbleChar>=forgiveBubbleFull.length){
+      forgiveBubbleWriting=false;
+      forgiveTapReady=true;
+    }
+  }
+
+  //  Caja de diálogo estilo novela visual 
+  if(forgiveBubbleText&&!forgiveDialogDone){
+    const boxH=canvas.height*0.22;
+    const boxY=canvas.height-boxH-12;
+    const boxX=10;
+    const boxW=canvas.width-20;
+    const r=12;
+
+    // Fondo caja
+    ctx.save();
+    ctx.fillStyle="rgba(5,0,0,0.88)";
+    ctx.strokeStyle= forgiveSpeaker===2 ? "#4488cc" : "#cc2222";
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.moveTo(boxX+r,boxY);
+    ctx.lineTo(boxX+boxW-r,boxY);
+    ctx.quadraticCurveTo(boxX+boxW,boxY,boxX+boxW,boxY+r);
+    ctx.lineTo(boxX+boxW,boxY+boxH-r);
+    ctx.quadraticCurveTo(boxX+boxW,boxY+boxH,boxX+boxW-r,boxY+boxH);
+    ctx.lineTo(boxX+r,boxY+boxH);
+    ctx.quadraticCurveTo(boxX,boxY+boxH,boxX,boxY+boxH-r);
+    ctx.lineTo(boxX,boxY+r);
+    ctx.quadraticCurveTo(boxX,boxY,boxX+r,boxY);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Nombre del hablante — etiqueta arriba a la izquierda
+    const nombre=forgiveSpeaker===2 ? "Tú" : "Él";
+    const nombreColor=forgiveSpeaker===2?"#88ccff":"#ff6666";
+    ctx.font="bold 14px Georgia,serif";
+    const nw=ctx.measureText(nombre).width+20;
+    ctx.fillStyle=forgiveSpeaker===2?"rgba(20,40,80,0.95)":"rgba(60,10,10,0.95)";
+    ctx.beginPath();
+    ctx.roundRect(boxX+14,boxY-18,nw,22,6);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle=nombreColor;
+    ctx.textAlign="left";
+    ctx.fillText(nombre,boxX+24,boxY-2);
+
+    // Texto del diálogo — wrapping manual
+    ctx.font="17px Georgia,serif";
+    ctx.fillStyle=forgiveSpeaker===2?"#cce8ff":"#ffcccc";
+    ctx.shadowColor=forgiveSpeaker===2?"rgba(0,100,255,0.3)":"rgba(255,0,0,0.3)";
+    ctx.shadowBlur=6;
+    const textX=boxX+20;
+    const maxW=boxW-40;
+    const lineH=26;
+    const lines=wrapText(forgiveBubbleText,maxW,ctx);
+    lines.forEach((line,i)=>{
+      ctx.fillText(line,textX,boxY+30+i*lineH);
+    });
+    ctx.shadowBlur=0;
+
+    // Indicador  parpadea dentro de la caja
+    if(forgiveTapReady){
+      ctx.globalAlpha=0.5+0.5*Math.sin(Date.now()*0.007);
+      ctx.fillStyle=nombreColor;
+      ctx.font="bold 16px Georgia,serif";
+      ctx.textAlign="right";
+      ctx.fillText("",boxX+boxW-14,boxY+boxH-10);
+    }
+
+    ctx.restore();
+  }
+
+  //  PANTALLA FINAL PERDÓN 
+  if(forgiveDialogDone){
+    forgiveEndTimer++;
+    const fadeImg=Math.min(1,(forgiveEndTimer-10)/70);
+    if(imgFinalPerdon.complete&&imgFinalPerdon.naturalWidth&&fadeImg>0){
+      ctx.save();
+      ctx.globalAlpha=fadeImg;
+      const ir=imgFinalPerdon.width/imgFinalPerdon.height;
+      const cr=canvas.width/canvas.height;
+      let dw,dh,dx,dy;
+      if(ir>cr){ dh=canvas.height; dw=dh*ir; dx=(canvas.width-dw)/2; dy=0; }
+      else { dw=canvas.width; dh=dw/ir; dx=0; dy=(canvas.height-dh)/2; }
+      ctx.drawImage(imgFinalPerdon,dx,dy,dw,dh);
+      ctx.fillStyle="rgba(0,0,0,0.58)";
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.restore();
+    }
+
+    const fadeText=Math.min(1,(forgiveEndTimer-60)/60);
+    if(fadeText>0){
+      ctx.save();
+      ctx.globalAlpha=fadeText;
+      ctx.textAlign="center";
+
+      ctx.font="bold 36px Georgia,serif";
+      ctx.fillStyle="#ff1111";
+      ctx.shadowColor="#ff0000"; ctx.shadowBlur=30;
+      ctx.fillText("A veces no hay que perdonar.",canvas.width/2,canvas.height*0.20);
+      ctx.shadowBlur=0;
+
+      // línea separadora
+      ctx.strokeStyle="rgba(180,0,0,0.5)";
+      ctx.lineWidth=1;
+      ctx.beginPath();
+      ctx.moveTo(canvas.width*0.15,canvas.height*0.27);
+      ctx.lineTo(canvas.width*0.85,canvas.height*0.27);
+      ctx.stroke();
+
+      ctx.font="italic 17px Georgia,serif";
+      ctx.fillStyle="#ffdddd";
+      ctx.fillText('"No des lo santo a los perros,',canvas.width/2,canvas.height*0.35);
+      ctx.fillText('ni echéis vuestras perlas delante de los cerdos."',canvas.width/2,canvas.height*0.41);
+      ctx.font="13px Georgia,serif";
+      ctx.fillStyle="#ff8888";
+      ctx.fillText("— Mateo 7:6",canvas.width/2,canvas.height*0.47);
+
+      ctx.font="italic 17px Georgia,serif";
+      ctx.fillStyle="#ffdddd";
+      ctx.fillText('"El que camina con sabios se hará sabio,',canvas.width/2,canvas.height*0.56);
+      ctx.fillText('pero el amigo de necios sufrirá mal."',canvas.width/2,canvas.height*0.62);
+      ctx.font="13px Georgia,serif";
+      ctx.fillStyle="#ff8888";
+      ctx.fillText("— Proverbios 13:20",canvas.width/2,canvas.height*0.67);
+
+      ctx.font="italic 17px Georgia,serif";
+      ctx.fillStyle="#ffdddd";
+      ctx.fillText('"Guarda tu corazón más que todo lo que guardas,',canvas.width/2,canvas.height*0.75);
+      ctx.fillText('porque de él mana la vida."',canvas.width/2,canvas.height*0.81);
+      ctx.font="13px Georgia,serif";
+      ctx.fillStyle="#ff8888";
+      ctx.fillText("— Proverbios 4:23",canvas.width/2,canvas.height*0.86);
+
+      ctx.restore();
+    }
+
+    const fadeFin=Math.min(1,(forgiveEndTimer-150)/50);
+    if(fadeFin>0){
+      ctx.save();
+      ctx.globalAlpha=fadeFin;
+      ctx.font="bold 20px Georgia,serif";
+      ctx.fillStyle="white";
+      ctx.textAlign="center";
+      ctx.shadowColor="#ff0000"; ctx.shadowBlur=18;
+      ctx.fillText("— FIN —",canvas.width/2,canvas.height*0.94);
+      ctx.restore();
+    }
+  }
+}
+
+// Helper para wrap de texto en canvas
+function wrapText(text,maxW,ctx){
+  const words=text.split(" ");
+  const lines=[];
+  let cur="";
+  for(const w of words){
+    const test=cur?cur+" "+w:w;
+    if(ctx.measureText(test).width>maxW&&cur){
+      lines.push(cur);
+      cur=w;
+    }else{
+      cur=test;
+    }
+  }
+  if(cur) lines.push(cur);
+  return lines;
+}
+
+//  BURBUJA 
+function startBubble(text,x,y){
+  bubbleFull=text; bubbleText=""; bubbleChar=0;
+  bubbleX=x; bubbleY=y; bubbleTimer=200;
+}
+function updateBubble(){
+  if(bubbleChar<bubbleFull.length){
+    bubbleChar++;
+    bubbleText=bubbleFull.substring(0,bubbleChar);
+  }else if(bubbleTimer>0){
+    bubbleTimer--;
+    if(bubbleTimer===0) bubbleText="";
+  }
+}
+function drawBubble(){
+  if(!bubbleText) return;
+  ctx.save();
+  ctx.font="bold 15px Georgia,serif";
+  const tw=ctx.measureText(bubbleText).width;
+  const pad=14;
+  const bw=Math.max(tw+pad*2,110);
+  const bh=38;
+  const bx=Math.min(Math.max(bubbleX-bw/2, 4), canvas.width-bw-4);
+  const by=bubbleY-95;
+
+  ctx.shadowColor="rgba(180,0,0,0.7)";
+  ctx.shadowBlur=12;
+  ctx.fillStyle="rgba(15,0,0,0.93)";
+  const r=8;
+  ctx.beginPath();
+  ctx.moveTo(bx+r,by);
+  ctx.lineTo(bx+bw-r,by);
+  ctx.quadraticCurveTo(bx+bw,by,bx+bw,by+r);
+  ctx.lineTo(bx+bw,by+bh-r);
+  ctx.quadraticCurveTo(bx+bw,by+bh,bx+bw-r,by+bh);
+  ctx.lineTo(bx+r,by+bh);
+  ctx.quadraticCurveTo(bx,by+bh,bx,by+bh-r);
+  ctx.lineTo(bx,by+r);
+  ctx.quadraticCurveTo(bx,by,bx+r,by);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle="#cc0000";
+  ctx.lineWidth=1.5;
+  ctx.stroke();
+
+  // pico
+  const px=Math.min(Math.max(bubbleX,bx+10),bx+bw-10);
+  ctx.beginPath();
+  ctx.moveTo(px-8,by+bh);
+  ctx.lineTo(px+8,by+bh);
+  ctx.lineTo(px,by+bh+10);
+  ctx.closePath();
+  ctx.fillStyle="rgba(15,0,0,0.93)";
+  ctx.fill();
+  ctx.strokeStyle="#cc0000";
+  ctx.lineWidth=1.5;
+  ctx.stroke();
+
+  ctx.shadowBlur=0;
+  ctx.fillStyle="#ffaaaa";
+  ctx.textAlign="center";
+  ctx.fillText(bubbleText,bx+bw/2,by+bh-11);
+  ctx.restore();
+}
+
+//  FONDO 
+let cloudOffset=0;
+function drawBackground(){
+  const sky=ctx.createLinearGradient(0,0,0,GROUND);
+  sky.addColorStop(0,"#0d0000");
+  sky.addColorStop(0.5,"#1a0000");
+  sky.addColorStop(1,"#2d0505");
+  ctx.fillStyle=sky;
+  ctx.fillRect(0,0,canvas.width,GROUND);
+
+  // luna
+  const moonX=canvas.width*0.75;
+  const moonY=canvas.height*0.18;
+  const moonR=55;
+  const halo=ctx.createRadialGradient(moonX,moonY,moonR*0.8,moonX,moonY,moonR*2.5);
+  halo.addColorStop(0,"rgba(200,20,20,0.25)");
+  halo.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle=halo;
+  ctx.beginPath(); ctx.arc(moonX,moonY,moonR*2.5,0,Math.PI*2); ctx.fill();
+  const mg=ctx.createRadialGradient(moonX-15,moonY-15,5,moonX,moonY,moonR);
+  mg.addColorStop(0,"#ff6666"); mg.addColorStop(0.6,"#cc0000"); mg.addColorStop(1,"#660000");
+  ctx.fillStyle=mg;
+  ctx.beginPath(); ctx.arc(moonX,moonY,moonR,0,Math.PI*2); ctx.fill();
+
+  // nubes
+  cloudOffset+=0.2;
+  ctx.save(); ctx.globalAlpha=0.18; ctx.fillStyle="#330000";
+  [{x:80,y:80,r:40},{x:300,y:60,r:55},{x:600,y:90,r:45},{x:900,y:55,r:50},{x:1150,y:75,r:40}].forEach(c=>{
+    const cx=(c.x-cloudOffset*0.5+canvas.width*2)%(canvas.width+200)-100;
+    ctx.beginPath();
+    ctx.arc(cx,c.y,c.r,0,Math.PI*2);
+    ctx.arc(cx+c.r*0.7,c.y-c.r*0.3,c.r*0.7,0,Math.PI*2);
+    ctx.arc(cx-c.r*0.6,c.y-c.r*0.2,c.r*0.6,0,Math.PI*2);
+    ctx.fill();
+  });
+  ctx.restore();
+
+  // montañas (parallax)
+  drawMountains(GROUND,cameraX*0.15,"#1a0505",7,200,360);
+  drawMountains(GROUND,cameraX*0.3,"#110000",9,130,250);
+  drawMountains(GROUND,cameraX*0.5,"#0a0000",6,90,180);
+
+  // suelo
+  const ground=ctx.createLinearGradient(0,GROUND,0,canvas.height);
+  ground.addColorStop(0,"#1a0000"); ground.addColorStop(1,"#050000");
+  ctx.fillStyle=ground;
+  ctx.fillRect(0,GROUND,canvas.width,canvas.height-GROUND);
+  ctx.strokeStyle="rgba(180,0,0,0.4)";
+  ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(0,GROUND); ctx.lineTo(canvas.width,GROUND); ctx.stroke();
+}
+
+function drawMountains(groundY,offset,color,count,minH,maxH){
+  ctx.fillStyle=color;
+  ctx.beginPath();
+  const segW=canvas.width/(count-1);
+  ctx.moveTo(0,groundY);
+  for(let i=0;i<count;i++){
+    const h=minH+(Math.sin(i*1.9+offset*0.004)*0.5+0.5)*(maxH-minH);
+    const bx=i*segW;
+    const pkX=bx+segW*0.5;
+    ctx.lineTo(pkX,groundY-h);
+    ctx.lineTo(bx+segW,groundY);
+  }
+  ctx.lineTo(canvas.width,groundY);
+  ctx.closePath();
+  ctx.fill();
+}
+
+//  GRAVEDAD JUGADOR 
+function applyGravity(entity){
+  entity.vy+=GRAVITY;
+  entity.y+=entity.vy;
+  if(entity.y>=GROUND){
+    entity.y=GROUND;
+    entity.vy=0;
+    entity.onGround=true;
+  }else{
+    entity.onGround=false;
+  }
+}
+
+//  UPDATE JUGADOR 
+function updatePlayer(){
+  applyGravity(player);
+
+  if(player.state==="hit"){
+    player.frameCount++;
+    if(player.frameCount>=6){
+      player.hitFrame++;
+      player.frameCount=0;
+      if(player.hitFrame>=hitImages.length){
+        player.hitFrame=0; player.state="idle"; hitApplied=false;
+      }
+    }
+    // puede moverse un poco mientras golpea
+    if(player.left) player.x-=speed*0.4;
+    if(player.right) player.x+=speed*0.4;
+    player.x=Math.max(0,Math.min(mapWidth,player.x));
+    return;
+  }
+
+  if(player.left) player.x-=speed;
+  if(player.right) player.x+=speed;
+  player.x=Math.max(0,Math.min(mapWidth,player.x));
+
+  if(player.left||player.right){
+    player.state="walk";
+    player.frameCount++;
+    if(player.frameCount>=8){
+      player.walkFrame=(player.walkFrame+1)%walkImages.length;
+      player.frameCount=0;
+    }
+  }else{
+    player.state="idle";
+    player.walkFrame=0;
+  }
+}
+
+//  IA DEL ENEMIGO 
+function updateEnemy(){
+  if(enemy.dead) return;
+
+  // gravedad enemigo
+  applyGravity(enemy);
+
+  const dx=player.x-enemy.x;
+  const dist=Math.abs(dx);
+
+  //  STUN: recibió golpe, retrocede un momento 
+  if(enemy.aiState==="stun"){
+    enemy.stunTimer--;
+    // retrocede en dirección contraria al jugador
+    enemy.x-=dx>0?3:-3;
+    enemy.x=Math.max(0,Math.min(mapWidth,enemy.x));
+    // animación walk mientras stun
+    enemy.state="walk";
+    enemy.frameCount++;
+    if(enemy.frameCount>=8){
+      enemy.walkFrame=(enemy.walkFrame+1)%walkImages.length;
+      enemy.frameCount=0;
+    }
+    if(enemy.stunTimer<=0){
+      // después del stun decide qué hacer según aggro
+      if(enemy.aggroLevel>=3){
+        enemy.aiState="strafe"; // muy agresivo  ataca de costado
+        enemy.strafeTimer=40+Math.random()*30|0;
+        enemy.strafeDir=Math.random()>0.5?1:-1;
+      }else{
+        enemy.aiState="chase";
+      }
+    }
+    return;
+  }
+
+  //  ANIMACIÓN DE GOLPE ENEMIGO 
+  if(enemy.state==="hit"){
+    enemy.frameCount++;
+    if(enemy.frameCount>=6){
+      enemy.hitFrame++;
+      enemy.frameCount=0;
+      if(enemy.hitFrame>=hitImages.length){
+        enemy.hitFrame=0;
+        enemy.state="walk";
+        enemyAttackApplied=false;
+        enemyAttackCooldown=Math.max(30, 90-enemy.aggroLevel*15); // más aggro = ataca más seguido
+        enemy.aiState="retreat"; // tras atacar, da un paso atrás
+        enemy.retreatTimer=20;
+      }
+    }
+    return;
+  }
+
+  if(enemyAttackCooldown>0) enemyAttackCooldown--;
+
+  //  RETREAT: retrocede brevemente tras atacar 
+  if(enemy.aiState==="retreat"){
+    enemy.retreatTimer--;
+    enemy.x-=dx>0?2.5:-2.5;
+    enemy.x=Math.max(0,Math.min(mapWidth,enemy.x));
+    enemy.state="walk";
+    enemy.frameCount++;
+    if(enemy.frameCount>=8){
+      enemy.walkFrame=(enemy.walkFrame+1)%walkImages.length;
+      enemy.frameCount=0;
+    }
+    if(enemy.retreatTimer<=0) enemy.aiState="chase";
+    return;
+  }
+
+  //  STRAFE: se mueve de lado para confundir 
+  if(enemy.aiState==="strafe"){
+    enemy.strafeTimer--;
+    // moverse perpendicular (en X) pero mantener distancia media
+    if(dist>200) enemy.x+=dx>0?enemy.speed:-enemy.speed; // si está lejos acercarse
+    else enemy.x+=enemy.strafeDir*3;
+    enemy.x=Math.max(0,Math.min(mapWidth,enemy.x));
+    enemy.state="walk";
+    enemy.frameCount++;
+    if(enemy.frameCount>=8){
+      enemy.walkFrame=(enemy.walkFrame+1)%walkImages.length;
+      enemy.frameCount=0;
+    }
+    // a veces salta durante strafe
+    if(enemy.onGround&&Math.random()<0.008){
+      enemy.vy=JUMP_FORCE*0.9;
+      enemy.onGround=false;
+    }
+    if(enemy.strafeTimer<=0){
+      enemy.aiState="chase";
+      enemy.strafeDir=-enemy.strafeDir;
+    }
+    // si llega a rango de ataque durante strafe  atacar
+    if(dist<130&&enemyAttackCooldown===0){
+      launchEnemyAttack();
+    }
+    return;
+  }
+
+  //  CHASE: perseguir al jugador 
+  if(enemy.aiState==="chase"){
+    if(dist>130){
+      enemy.x+=dx>0?enemy.speed:-enemy.speed;
+      enemy.state="walk";
+      enemy.frameCount++;
+      if(enemy.frameCount>=8){
+        enemy.walkFrame=(enemy.walkFrame+1)%walkImages.length;
+        enemy.frameCount=0;
+      }
+      // salto ocasional mientras persigue (más probable si player está arriba)
+      if(enemy.onGround&&Math.random()<0.005){
+        enemy.vy=JUMP_FORCE;
+        enemy.onGround=false;
+      }
+    }else{
+      // En rango  atacar
+      enemy.state="walk";
+      if(enemyAttackCooldown===0){
+        launchEnemyAttack();
+      }
+    }
+    return;
+  }
+}
+
+function launchEnemyAttack(){
+  enemy.state="hit";
+  enemy.hitFrame=0;
+  enemy.frameCount=0;
+  enemyAttackApplied=false;
+  enemy.aiState="chase"; // estado IA queda chase, la animación controla
+}
+
+//  CHECK GOLPES 
+function checkHit(){
+  if(hitApplied) return;
+  if(player.state!=="hit"||player.hitFrame!==2) return;
+  const dist=Math.abs(player.x-enemy.x);
+  if(dist>=155) return;
+
+  hitApplied=true;
+
+  if(!enemy.dead && enemyHealth>0){
+    enemyHealth-=5;
+    enemy.hitFlash=8;   // flash rojo por 8 frames solamente
+    playHitSound();
+    // stun al recibir golpe
+    enemy.aiState="stun";
+    enemy.stunTimer=25;
+    enemy.aggroLevel=Math.min(enemy.aggroLevel+1,5); // se vuelve más agresivo
+    enemy.speed=Math.min(2+enemy.aggroLevel*0.4, 4); // se vuelve más rápido
+
+    if(enemyHealth<=0){
+      enemyHealth=0;
+      enemy.dead=true;
+      enemy.state="dead";
+      finishing=true;
+      soundBeg.play();
+      startBubble("¡No... por favor!",enemy.x-cameraX,enemy.y-80);
+    }
+  }else if(finishing){
+    finishStep++;
+    enemy.hitFlash=8;
+    playHitSound();
+    enemy.deathHits=Math.min(finishStep,deathImages.length-1);
+    startBubble(frasesPerdon[Math.min(finishStep-1,frasesPerdon.length-1)],enemy.x-cameraX,enemy.y-80);
+    if(finishStep>=4) choiceBox.style.display="flex";
+  }
+}
+
+function checkEnemyHit(){
+  if(enemy.dead) return;
+  if(enemy.state!=="hit") return;
+  if(enemyAttackApplied) return;
+  if(enemy.hitFrame!==2) return;
+  const dist=Math.abs(player.x-enemy.x);
+  if(dist>=155) return;
+  enemyAttackApplied=true;
+  playerHealth=Math.max(0,playerHealth-8);
+  playHitSound();
+}
+
+function updateCamera(){
+  cameraX=player.x-canvas.width/2;
+  cameraX=Math.max(0,Math.min(mapWidth-canvas.width,cameraX));
+}
+
+//  DIBUJAR PERSONAJE 
+function drawCharacter(c,isEnemy=false){
+  let img;
+
+  // Si perdonamos: el enemigo se dibuja con imgTraidor (imagen fija, no animada)
+  if(isEnemy && forgiveMode){
+    if(imgTraidor.complete && imgTraidor.naturalWidth){
+      const drawH=imgTraidor.height*scale;
+      const drawW=imgTraidor.width*scale;
+      const screenX=c.x-cameraX;
+      const drawY=c.y-drawH;
+      ctx.save();
+      ctx.translate(screenX+drawW/2,0);
+      ctx.scale(-1,1);
+      ctx.drawImage(imgTraidor,-drawW/2,drawY,drawW,drawH);
+      ctx.restore();
+    }
+    return;
+  }
+
+  if(isEnemy&&c.dead){
+    img=deathImages[Math.min(c.deathHits,deathImages.length-1)];
+  }else if(c.state==="hit"){
+    img=hitImages[Math.min(c.hitFrame,hitImages.length-1)];
+  }else{
+    img=walkImages[Math.min(c.walkFrame,walkImages.length-1)];
+  }
+  if(!img||!img.complete||!img.naturalWidth) return;
+
+  const drawW=img.width*scale;
+  const drawH=img.height*scale;
+  const screenX=c.x-cameraX;
+  const drawY=c.y-drawH; // pies en c.y
+
+  ctx.save();
+
+  // flash rojo SOLO cuando acaba de recibir golpe (hitFlash dura pocos frames)
+  if(isEnemy && enemy.hitFlash>0){
+    enemy.hitFlash--;
+    ctx.filter="brightness(2.5) sepia(1) saturate(10) hue-rotate(-10deg)";
+  }
+
+  const flip=isEnemy; // enemigo siempre flipado (mira a la izquierda)
+  if(flip){
+    ctx.translate(screenX+drawW/2,0);
+    ctx.scale(-1,1);
+    ctx.drawImage(img,-drawW/2,drawY,drawW,drawH);
+  }else{
+    ctx.drawImage(img,screenX-drawW/2,drawY,drawW,drawH);
+  }
+  ctx.filter="none";
+  ctx.restore();
+}
+
+function updateBars(){
+  playerHealthInner.style.width=(playerHealth/200*100)+"%";
+  enemyHealthInner.style.width=Math.max(0,enemyHealth/200*100)+"%";
+}
+
+//  FINAL ATAQUE: historia con figurita abajo 
+let creditCharIndex=0;    // para efecto de escritura línea a línea
+let creditLineTimer=0;
+
+function drawCredits(){
+  ctx.fillStyle="black";
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // Figurita abajo — tamaño pequeño, centrada
+  if(imgFinalAtaque.complete&&imgFinalAtaque.naturalWidth){
+    const fh=canvas.height*0.28;
+    const fw=fh*(imgFinalAtaque.width/imgFinalAtaque.naturalHeight||1);
+    const fx=canvas.width/2-fw/2;
+    const fy=canvas.height-fh-10;
+    ctx.drawImage(imgFinalAtaque,fx,fy,fw,fh);
+  }
+
+  // Título
+  ctx.fillStyle="#cc0000";
+  ctx.font="bold 20px Georgia,serif";
+  ctx.textAlign="center";
+  ctx.shadowColor="#880000"; ctx.shadowBlur=10;
+  ctx.fillText("RC7 - EL JUEGO",canvas.width/2,creditY);
+  ctx.shadowBlur=0;
+
+  // Avanzar líneas
+  creditLineTimer++;
+  if(creditLineTimer>90 && historiaIndex<historiaMala.length){
+    historiaIndex++;
+    creditLineTimer=0;
+  }
+
+  // Dibujar líneas con efecto typewriter
+  const startY=creditY+44;
+  const lineH=26;
+  const maxLines=Math.floor((canvas.height*0.65-startY)/lineH);
+
+  for(let i=0;i<historiaIndex&&i<maxLines;i++){
+    const linea=historiaMala[i];
+    const isLast=(i===historiaMala.length-1);
+    const alpha=Math.min(1,(historiaIndex-i)*0.5);
+    ctx.globalAlpha=alpha;
+    ctx.font=isLast?"bold 19px Georgia,serif":"16px Georgia,serif";
+    ctx.fillStyle=isLast?"#ff3333":"#ffdddd";
+    ctx.shadowColor=isLast?"#ff0000":"transparent";
+    ctx.shadowBlur=isLast?16:0;
+    ctx.fillText(linea,canvas.width/2,startY+i*lineH);
+  }
+  ctx.globalAlpha=1;
+  ctx.shadowBlur=0;
+  creditY-=0.3;
+}
+
+//  LOOP 
+function loop(){
+  if(forgiveMode){
+    drawForgiveScene();
+    requestAnimationFrame(loop);
+    return;
+  }
+  if(showCredits){
+    drawCredits();
+    requestAnimationFrame(loop);
+    return;
+  }
+
+  updatePlayer();
+  updateEnemy();
+  checkHit();
+  checkEnemyHit();
+  updateCamera();
+  updateBars();
+  updateBubble();
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  drawBackground();
+  drawCharacter(player,false);
+  drawCharacter(enemy,true);
+  drawBubble();
+
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
